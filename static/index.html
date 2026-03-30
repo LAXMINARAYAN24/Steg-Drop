@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Steg-Drop — Secure Steganography</title>
+    <meta name="description" content="Hide any file inside an image using edge-adaptive steganography with AES-256-GCM encryption.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Animated background particles -->
+    <div class="bg-particles" id="bgParticles"></div>
+
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="logo">
+                <div class="logo-icon">
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                        <rect x="2" y="2" width="28" height="28" rx="6" stroke="url(#grad)" stroke-width="2.5"/>
+                        <path d="M10 16L14 20L22 12" stroke="url(#grad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        <circle cx="16" cy="16" r="3" fill="url(#grad)" opacity="0.3"/>
+                        <defs>
+                            <linearGradient id="grad" x1="0" y1="0" x2="32" y2="32">
+                                <stop stop-color="#6366f1"/>
+                                <stop offset="1" stop-color="#a855f7"/>
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="logo-text">Steg-Drop</h1>
+                    <p class="logo-tagline">Edge-Adaptive Steganography</p>
+                </div>
+            </div>
+            <div class="header-badge">
+                <span class="badge-dot"></span>
+                AES-256-GCM · Zero Knowledge
+            </div>
+        </header>
+
+        <!-- Tab Navigation -->
+        <nav class="tab-nav">
+            <button class="tab-btn active" data-tab="encode" id="tab-encode">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                </svg>
+                Encode
+            </button>
+            <button class="tab-btn" data-tab="decode" id="tab-decode">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                    <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
+                </svg>
+                Decode
+            </button>
+        </nav>
+
+        <!-- ============ ENCODE TAB ============ -->
+        <section class="tab-content active" id="panel-encode">
+            <form id="encode-form" class="form-grid">
+                <!-- Cover Image Upload -->
+                <div class="form-section">
+                    <label class="form-label">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                        Cover Image
+                    </label>
+                    <p class="form-hint">The image your secret will be hidden inside. Larger, complex images = more capacity.</p>
+                    <div class="drop-zone" id="cover-drop-zone">
+                        <input type="file" id="cover-image" accept="image/*" required>
+                        <div class="drop-zone-content">
+                            <div class="drop-icon">
+                                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                            </div>
+                            <p class="drop-text">Drop image here or <span class="browse-link">browse</span></p>
+                            <p class="drop-info">PNG, JPG, BMP, TIFF</p>
+                        </div>
+                        <div class="drop-zone-preview" id="cover-preview" style="display:none;">
+                            <img id="cover-preview-img" alt="Cover preview">
+                            <button type="button" class="remove-btn" id="cover-remove">✕</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Secret Payload -->
+                <div class="form-section">
+                    <label class="form-label">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+                        Secret Payload
+                    </label>
+                    <p class="form-hint">Hide any file (image, zip, PDF, document) or type a text message.</p>
+                    
+                    <div class="payload-toggle">
+                        <button type="button" class="toggle-btn active" data-payload="text" id="payload-text-btn">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                            Text
+                        </button>
+                        <button type="button" class="toggle-btn" data-payload="file" id="payload-file-btn">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.49"/></svg>
+                            File
+                        </button>
+                    </div>
+
+                    <div id="text-input-area">
+                        <textarea id="secret-text" placeholder="Type your secret message here..." rows="5"></textarea>
+                    </div>
+                    <div id="file-input-area" style="display:none;">
+                        <div class="drop-zone small" id="secret-drop-zone">
+                            <input type="file" id="secret-file">
+                            <div class="drop-zone-content">
+                                <div class="drop-icon small">
+                                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.49"/></svg>
+                                </div>
+                                <p class="drop-text">Drop any file or <span class="browse-link">browse</span></p>
+                                <p class="drop-info">Any file type supported</p>
+                            </div>
+                            <div class="drop-zone-preview file-preview" id="secret-file-preview" style="display:none;">
+                                <div class="file-info">
+                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+                                    <div>
+                                        <p class="file-name" id="secret-file-name">filename.zip</p>
+                                        <p class="file-size" id="secret-file-size">2.4 MB</p>
+                                    </div>
+                                </div>
+                                <button type="button" class="remove-btn" id="secret-remove">✕</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Password -->
+                <div class="form-section">
+                    <label class="form-label" for="encode-password">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+                        Master Password
+                    </label>
+                    <div class="password-wrapper">
+                        <input type="password" id="encode-password" placeholder="Enter a strong password" required autocomplete="off">
+                        <button type="button" class="eye-btn" id="encode-eye">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Submit -->
+                <button type="submit" class="btn-primary" id="encode-btn">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    <span>Encode & Download</span>
+                    <div class="spinner" style="display:none;"></div>
+                </button>
+            </form>
+
+            <!-- Status Message -->
+            <div class="status-message" id="encode-status" style="display:none;"></div>
+        </section>
+
+        <!-- ============ DECODE TAB ============ -->
+        <section class="tab-content" id="panel-decode">
+            <form id="decode-form" class="form-grid">
+                <!-- Stego Image Upload -->
+                <div class="form-section">
+                    <label class="form-label">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                        Stego Image
+                    </label>
+                    <p class="form-hint">Upload the image that contains the hidden payload.</p>
+                    <div class="drop-zone" id="stego-drop-zone">
+                        <input type="file" id="stego-image" accept="image/*" required>
+                        <div class="drop-zone-content">
+                            <div class="drop-icon">
+                                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                            </div>
+                            <p class="drop-text">Drop stego image here or <span class="browse-link">browse</span></p>
+                            <p class="drop-info">PNG only (steganography output)</p>
+                        </div>
+                        <div class="drop-zone-preview" id="stego-preview" style="display:none;">
+                            <img id="stego-preview-img" alt="Stego preview">
+                            <button type="button" class="remove-btn" id="stego-remove">✕</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Password -->
+                <div class="form-section">
+                    <label class="form-label" for="decode-password">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+                        Master Password
+                    </label>
+                    <div class="password-wrapper">
+                        <input type="password" id="decode-password" placeholder="Enter the password used for encoding" required autocomplete="off">
+                        <button type="button" class="eye-btn" id="decode-eye">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Submit -->
+                <button type="submit" class="btn-primary decode" id="decode-btn">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>
+                    <span>Decode Secret</span>
+                    <div class="spinner" style="display:none;"></div>
+                </button>
+            </form>
+
+            <!-- Status Message -->
+            <div class="status-message" id="decode-status" style="display:none;"></div>
+
+            <!-- Decoded Result -->
+            <div class="result-card" id="decode-result" style="display:none;">
+                <div class="result-header">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                    <span>Secret Revealed</span>
+                </div>
+                <div id="result-content"></div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            <p>Steg-Drop · Edge-Adaptive LSB Steganography · AES-256-GCM · PBKDF2-SHA256</p>
+            <p class="footer-sub">Zero-Knowledge · No data stored on server</p>
+        </footer>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
