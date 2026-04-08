@@ -1,6 +1,7 @@
 /**
  * Steg-Drop — Frontend Logic
- * Tab switching, form handling, drag-and-drop, encode/decode API calls
+ * Tab switching, form handling, drag-and-drop, encode/decode API calls,
+ * metrics dashboard, and interception alert system.
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -156,6 +157,7 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         const btn = document.getElementById('encode-btn');
         const statusEl = document.getElementById('encode-status');
+        const metricsPanel = document.getElementById('encode-metrics');
         const spinner = btn.querySelector('.spinner');
         const btnText = btn.querySelector('span');
 
@@ -186,16 +188,22 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             setLoading(btn, spinner, btnText, true);
             showStatus(statusEl, 'Encrypting and embedding — this may take a moment...', 'info');
+            metricsPanel.style.display = 'none';
 
             const response = await fetch('/encode', { method: 'POST', body: formData });
+            const data = await response.json();
 
             if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.detail || 'Encoding failed');
+                throw new Error(data.detail || 'Encoding failed');
             }
 
-            // Download the stego image
-            const blob = await response.blob();
+            // Download the stego image from base64
+            const byteChars = atob(data.image_base64);
+            const byteNumbers = new Uint8Array(byteChars.length);
+            for (let i = 0; i < byteChars.length; i++) {
+                byteNumbers[i] = byteChars.charCodeAt(i);
+            }
+            const blob = new Blob([byteNumbers], { type: 'image/png' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -204,6 +212,11 @@ document.addEventListener('DOMContentLoaded', () => {
             URL.revokeObjectURL(url);
 
             showStatus(statusEl, '✅ Success! Stego image downloaded. Your secret is hidden inside.', 'success');
+
+            // Render metrics
+            if (data.metrics) {
+                renderEncodeMetrics(metricsPanel, data.metrics);
+            }
         } catch (err) {
             showStatus(statusEl, `❌ ${err.message}`, 'error');
         } finally {
@@ -219,6 +232,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const statusEl = document.getElementById('decode-status');
         const resultCard = document.getElementById('decode-result');
         const resultContent = document.getElementById('result-content');
+        const alertsPanel = document.getElementById('decode-alerts');
+        const metricsPanel = document.getElementById('decode-metrics');
         const spinner = btn.querySelector('.spinner');
         const btnText = btn.querySelector('span');
 
@@ -236,38 +251,51 @@ document.addEventListener('DOMContentLoaded', () => {
             setLoading(btn, spinner, btnText, true);
             showStatus(statusEl, 'Extracting and decrypting — please wait...', 'info');
             resultCard.style.display = 'none';
+            alertsPanel.innerHTML = '';
+            alertsPanel.style.display = 'none';
+            metricsPanel.style.display = 'none';
 
             const response = await fetch('/decode', { method: 'POST', body: formData });
+            const data = await response.json();
 
-            if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.detail || 'Decoding failed');
+            // Render alerts (always, even on error)
+            if (data.alerts && data.alerts.length > 0) {
+                renderAlerts(alertsPanel, data.alerts);
             }
 
-            const contentType = response.headers.get('content-type');
+            // Render metrics (always, even on error)
+            if (data.metrics) {
+                renderDecodeMetrics(metricsPanel, data.metrics);
+            }
 
-            if (contentType && contentType.includes('application/json')) {
-                // Text payload
-                const data = await response.json();
+            if (!response.ok || data.error) {
+                // Error with interception alert
+                showStatus(statusEl, '', 'error');
+                statusEl.style.display = 'none';
+                resultCard.style.display = 'none';
+                return;
+            }
+
+            if (data.type === 'text') {
                 resultContent.textContent = data.content;
                 resultCard.style.display = 'block';
                 showStatus(statusEl, '✅ Text secret decoded successfully!', 'success');
-            } else {
-                // File payload — trigger download
-                const blob = await response.blob();
-                const disposition = response.headers.get('content-disposition') || '';
-                let filename = 'decoded-file';
-                const match = disposition.match(/filename=(.+)/);
-                if (match) filename = match[1];
-
+            } else if (data.type === 'file') {
+                // Decode base64 file and trigger download
+                const byteChars = atob(data.file_base64);
+                const byteNumbers = new Uint8Array(byteChars.length);
+                for (let i = 0; i < byteChars.length; i++) {
+                    byteNumbers[i] = byteChars.charCodeAt(i);
+                }
+                const blob = new Blob([byteNumbers], { type: data.mime_type || 'application/octet-stream' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = filename;
+                a.download = data.filename || 'decoded-file';
                 a.click();
                 URL.revokeObjectURL(url);
 
-                resultContent.innerHTML = `<a href="#" class="download-link" onclick="return false;">📎 ${escapeHtml(filename)} (${formatSize(blob.size)}) — Downloaded</a>`;
+                resultContent.innerHTML = `<a href="#" class="download-link" onclick="return false;">📎 ${escapeHtml(data.filename)} (${formatSize(blob.size)}) — Downloaded</a>`;
                 resultCard.style.display = 'block';
                 showStatus(statusEl, '✅ File secret decoded and downloaded!', 'success');
             }
@@ -278,6 +306,168 @@ document.addEventListener('DOMContentLoaded', () => {
             setLoading(btn, spinner, btnText, false);
         }
     });
+
+    // ===== Render Encode Metrics =====
+    function renderEncodeMetrics(panel, m) {
+        const timingItems = [
+            { label: 'Key Derivation (PBKDF2)', value: m.key_derivation_time_ms, unit: 'ms', icon: '🔑' },
+            { label: 'AES-256-GCM Encryption', value: m.encryption_time_ms, unit: 'ms', icon: '🔒' },
+            { label: 'Capacity Analysis', value: m.capacity_analysis_time_ms, unit: 'ms', icon: '📊' },
+            { label: 'Steganographic Encoding', value: m.steganographic_encoding_time_ms, unit: 'ms', icon: '🖼️' },
+            { label: 'Total Processing Time', value: m.total_time_ms, unit: 'ms', icon: '⏱️', highlight: true },
+        ];
+
+        const dataItems = [
+            { label: 'Image Dimensions', value: `${m.image_width} × ${m.image_height}`, icon: '📐' },
+            { label: 'Cover Image Size', value: formatSize(m.cover_image_size_bytes), icon: '🖼️' },
+            { label: 'Original Payload', value: formatSize(m.original_payload_size_bytes), icon: '📦' },
+            { label: 'Encrypted Payload', value: formatSize(m.encrypted_payload_size_bytes), icon: '🔐' },
+            { label: 'Image Capacity', value: formatSize(m.image_capacity_bytes), icon: '💾' },
+            { label: 'Capacity Used', value: `${m.capacity_used_percent}%`, icon: '📈', highlight: m.capacity_used_percent > 75 },
+            { label: 'Stego Image Size', value: formatSize(m.stego_image_size_bytes), icon: '📁' },
+            { label: 'Integrity Hash', value: m.stego_sha256, icon: '🛡️', mono: true },
+        ];
+
+        panel.innerHTML = `
+            <div class="metrics-header">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+                <span>Performance Metrics</span>
+            </div>
+            <div class="metrics-section">
+                <div class="metrics-section-title">⏱️ Timing Breakdown</div>
+                <div class="metrics-grid">
+                    ${timingItems.map(item => renderMetricItem(item)).join('')}
+                </div>
+            </div>
+            <div class="metrics-section">
+                <div class="metrics-section-title">📊 Data Metrics</div>
+                <div class="metrics-grid">
+                    ${dataItems.map(item => renderMetricItem(item)).join('')}
+                </div>
+            </div>
+            ${renderCapacityBar(m.capacity_used_percent)}
+        `;
+        panel.style.display = 'block';
+    }
+
+    // ===== Render Decode Metrics =====
+    function renderDecodeMetrics(panel, m) {
+        const timingItems = [];
+        if (m.steganographic_decoding_time_ms !== undefined) {
+            timingItems.push({ label: 'Steganographic Extraction', value: m.steganographic_decoding_time_ms, unit: 'ms', icon: '🖼️' });
+        }
+        if (m.key_derivation_time_ms !== undefined) {
+            timingItems.push({ label: 'Key Derivation (PBKDF2)', value: m.key_derivation_time_ms, unit: 'ms', icon: '🔑' });
+        }
+        if (m.decryption_time_ms !== undefined) {
+            timingItems.push({ label: 'AES-256-GCM Decryption', value: m.decryption_time_ms, unit: 'ms', icon: '🔓' });
+        }
+        if (m.total_time_ms !== undefined) {
+            timingItems.push({ label: 'Total Processing Time', value: m.total_time_ms, unit: 'ms', icon: '⏱️', highlight: true });
+        }
+
+        const dataItems = [
+            { label: 'Stego Image Size', value: formatSize(m.stego_image_size_bytes), icon: '📁' },
+        ];
+        if (m.extracted_data_size_bytes !== undefined) {
+            dataItems.push({ label: 'Extracted Data', value: formatSize(m.extracted_data_size_bytes), icon: '📦' });
+        }
+        if (m.decrypted_payload_size_bytes !== undefined) {
+            dataItems.push({ label: 'Decrypted Payload', value: formatSize(m.decrypted_payload_size_bytes), icon: '🔐' });
+        }
+        if (m.stego_sha256) {
+            dataItems.push({ label: 'Image Hash', value: m.stego_sha256, icon: '🛡️', mono: true });
+        }
+
+        panel.innerHTML = `
+            <div class="metrics-header">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+                <span>Performance Metrics</span>
+            </div>
+            ${timingItems.length > 0 ? `
+            <div class="metrics-section">
+                <div class="metrics-section-title">⏱️ Timing Breakdown</div>
+                <div class="metrics-grid">
+                    ${timingItems.map(item => renderMetricItem(item)).join('')}
+                </div>
+            </div>` : ''}
+            <div class="metrics-section">
+                <div class="metrics-section-title">📊 Data Metrics</div>
+                <div class="metrics-grid">
+                    ${dataItems.map(item => renderMetricItem(item)).join('')}
+                </div>
+            </div>
+        `;
+        panel.style.display = 'block';
+    }
+
+    // ===== Render Individual Metric Item =====
+    function renderMetricItem(item) {
+        const valueClass = item.highlight ? 'metric-value highlight' : 'metric-value';
+        const monoClass = item.mono ? ' mono' : '';
+        const displayValue = item.unit ? `${item.value} ${item.unit}` : item.value;
+        return `
+            <div class="metric-item">
+                <div class="metric-icon">${item.icon}</div>
+                <div class="metric-details">
+                    <div class="metric-label">${item.label}</div>
+                    <div class="${valueClass}${monoClass}">${displayValue}</div>
+                </div>
+            </div>
+        `;
+    }
+
+    // ===== Render Capacity Bar =====
+    function renderCapacityBar(percent) {
+        const barColor = percent > 90 ? 'var(--accent-rose)' :
+                         percent > 75 ? '#f59e0b' :
+                         'var(--accent-emerald)';
+        return `
+            <div class="capacity-bar-container">
+                <div class="capacity-bar-label">
+                    <span>Image Capacity Usage</span>
+                    <span class="capacity-percent" style="color: ${barColor}">${percent}%</span>
+                </div>
+                <div class="capacity-bar-track">
+                    <div class="capacity-bar-fill" style="width: ${Math.min(percent, 100)}%; background: ${barColor};"></div>
+                </div>
+            </div>
+        `;
+    }
+
+    // ===== Render Alerts (Interception Detection) =====
+    function renderAlerts(panel, alerts) {
+        panel.innerHTML = alerts.map(alert => {
+            const levelClass = `alert-${alert.level}`;
+            const icon = alert.level === 'critical' ? `
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/>
+                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>` :
+                alert.level === 'warning' ? `
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/>
+                    <path d="M12 8v4"/>
+                    <path d="M12 16h.01"/>
+                </svg>` : `
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                    <polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>`;
+
+            return `
+                <div class="alert-card ${levelClass}">
+                    <div class="alert-icon">${icon}</div>
+                    <div class="alert-body">
+                        <div class="alert-title">${escapeHtml(alert.title)}</div>
+                        <div class="alert-message">${escapeHtml(alert.message).replace(/\n/g, '<br>')}</div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        panel.style.display = 'block';
+    }
 
     // ===== Helpers =====
     function showStatus(el, message, type) {
@@ -293,6 +483,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function formatSize(bytes) {
+        if (bytes === undefined || bytes === null) return '—';
         if (bytes < 1024) return bytes + ' B';
         if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
         return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
