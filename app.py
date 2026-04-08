@@ -4,9 +4,6 @@ Zero-knowledge steganography service: all processing in RAM, nothing saved to di
 """
 
 import os
-import time
-import base64
-import hashlib
 from io import BytesIO
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -57,11 +54,8 @@ async def encode_endpoint(
 ):
     """
     Accepts a cover image + (text OR any file) + password.
-    Returns JSON with base64 stego image and comprehensive metrics.
+    Returns a stego PNG image with the secret embedded.
     """
-    total_start = time.perf_counter()
-    metrics = {}
-
     # Read cover image
     cover_bytes = await cover_image.read()
     if not cover_bytes:
@@ -69,53 +63,32 @@ async def encode_endpoint(
 
     # Determine payload
     secret_file_bytes = b""
-    secret_filename = ""
     if secret_file and secret_file.filename:
         secret_file_bytes = await secret_file.read()
-        secret_filename = secret_file.filename
 
     if secret_file_bytes:
-        serialized = serialize_payload(secret_file_bytes, secret_filename, PAYLOAD_FILE)
-        metrics["payload_type"] = "file"
-        metrics["payload_filename"] = secret_filename
+        serialized = serialize_payload(secret_file_bytes, secret_file.filename, PAYLOAD_FILE)
     elif secret_text:
         serialized = serialize_payload(secret_text.encode("utf-8"), "message.txt", PAYLOAD_TEXT)
-        metrics["payload_type"] = "text"
-        metrics["payload_filename"] = "message.txt"
     else:
         raise HTTPException(status_code=400, detail="Provide either secret text or a secret file.")
 
-    metrics["original_payload_size_bytes"] = len(serialized)
-
-    # Derive key with a random salt — timed
-    t0 = time.perf_counter()
+    # Derive key with a random salt
     key, salt = derive_key(password, None)
-    metrics["key_derivation_time_ms"] = round((time.perf_counter() - t0) * 1000, 2)
 
-    # Encrypt — timed
-    t0 = time.perf_counter()
+    # Encrypt
     encrypted = encrypt(serialized, key)
-    metrics["encryption_time_ms"] = round((time.perf_counter() - t0) * 1000, 2)
     
     # Prepend 16-byte salt to the encrypted data
     payload_to_hide = salt + encrypted
-    metrics["encrypted_payload_size_bytes"] = len(payload_to_hide)
 
-    # Check capacity — timed
-    t0 = time.perf_counter()
+    # Check capacity
     try:
         img = Image.open(BytesIO(cover_bytes)).convert("RGB")
         image_array = np.array(img, dtype=np.uint8)
         capacity = get_capacity(image_array)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid cover image.")
-    metrics["capacity_analysis_time_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-
-    metrics["image_width"] = img.width
-    metrics["image_height"] = img.height
-    metrics["image_capacity_bytes"] = capacity
-    metrics["capacity_used_percent"] = round((len(payload_to_hide) / capacity) * 100, 1) if capacity > 0 else 0
-    metrics["cover_image_size_bytes"] = len(cover_bytes)
 
     if len(payload_to_hide) > capacity:
         raise HTTPException(
@@ -125,27 +98,18 @@ async def encode_endpoint(
                    f"Use a larger or more complex image.",
         )
 
-    # Encode into image — timed
-    t0 = time.perf_counter()
+    # Encode into image
     try:
         stego_bytes = encode(cover_bytes, payload_to_hide)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    metrics["steganographic_encoding_time_ms"] = round((time.perf_counter() - t0) * 1000, 2)
 
-    metrics["stego_image_size_bytes"] = len(stego_bytes)
-    metrics["total_time_ms"] = round((time.perf_counter() - total_start) * 1000, 2)
-
-    # Compute integrity hash of the stego image for later verification
-    metrics["stego_sha256"] = hashlib.sha256(stego_bytes).hexdigest()[:16]
-
-    # Encode to base64 for JSON response
-    stego_b64 = base64.b64encode(stego_bytes).decode("ascii")
-
-    return JSONResponse(content={
-        "image_base64": stego_b64,
-        "metrics": metrics,
-    })
+    # Stream back as PNG download — zero-knowledge: nothing stored
+    return StreamingResponse(
+        BytesIO(stego_bytes),
+        media_type="image/png",
+        headers={"Content-Disposition": "attachment; filename=steg-drop-output.png"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -159,105 +123,36 @@ async def decode_endpoint(
 ):
     """
     Accepts a stego image + password.
-    Returns the hidden payload (auto-detects text vs. file) with metrics
-    and interception/tamper alerts.
+    Returns the hidden payload (auto-detects text vs. file).
     """
-    total_start = time.perf_counter()
-    metrics = {}
-    alerts = []  # Interception / tamper alerts
-
     stego_bytes = await stego_image.read()
     if not stego_bytes:
         raise HTTPException(status_code=400, detail="Stego image is empty.")
 
-    metrics["stego_image_size_bytes"] = len(stego_bytes)
-
-    # Compute hash of the incoming stego image
-    metrics["stego_sha256"] = hashlib.sha256(stego_bytes).hexdigest()[:16]
-
-    # Extract bits from image — timed
-    t0 = time.perf_counter()
+    # Extract bits from image
     try:
         extracted = decode(stego_bytes)
     except ValueError as e:
-        alerts.append({
-            "level": "critical",
-            "title": "⚠️ Possible Interception Detected",
-            "message": f"Failed to extract hidden data from image. The image may have been modified, "
-                       f"recompressed, or intercepted during transmission. Error: {str(e)}",
-        })
-        return JSONResponse(status_code=400, content={
-            "error": True,
-            "detail": str(e),
-            "alerts": alerts,
-            "metrics": metrics,
-        })
-    metrics["steganographic_decoding_time_ms"] = round((time.perf_counter() - t0) * 1000, 2)
+        raise HTTPException(status_code=400, detail=str(e))
 
     if len(extracted) < 16:
-        alerts.append({
-            "level": "critical",
-            "title": "⚠️ Possible Interception Detected",
-            "message": "Extracted data is too short. The image may have been tampered with, "
-                       "cropped, or re-encoded during transit.",
-        })
-        return JSONResponse(status_code=400, content={
-            "error": True,
-            "detail": "Invalid hidden data format.",
-            "alerts": alerts,
-            "metrics": metrics,
-        })
-
-    metrics["extracted_data_size_bytes"] = len(extracted)
+        raise HTTPException(status_code=400, detail="Invalid hidden data format.")
 
     # Extract 16-byte salt and the rest is encrypted data
     salt = extracted[:16]
     encrypted = extracted[16:]
 
-    # Derive key using the extracted salt — timed
-    t0 = time.perf_counter()
+    # Derive key using the extracted salt
     key, _ = derive_key(password, salt)
-    metrics["key_derivation_time_ms"] = round((time.perf_counter() - t0) * 1000, 2)
 
-    # Decrypt — timed
-    t0 = time.perf_counter()
+    # Decrypt
     try:
         serialized = decrypt(encrypted, key)
-        metrics["decryption_time_ms"] = round((time.perf_counter() - t0) * 1000, 2)
     except ValueError:
-        metrics["decryption_time_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-        metrics["total_time_ms"] = round((time.perf_counter() - total_start) * 1000, 2)
-        alerts.append({
-            "level": "critical",
-            "title": "🔴 INTERCEPTION ALERT — Data Integrity Compromised",
-            "message": "AES-256-GCM authentication tag verification FAILED. "
-                       "This means one or more of the following:\n"
-                       "• The image was modified or tampered with after encoding\n"
-                       "• The wrong password was provided\n"
-                       "• The image was re-encoded, compressed, or screenshot-captured\n"
-                       "• A man-in-the-middle attack may have altered the data in transit",
-        })
-        alerts.append({
-            "level": "warning",
-            "title": "🛡️ Security Recommendation",
-            "message": "If you believe the password is correct, the data has likely been "
-                       "intercepted or tampered with. Do NOT trust the contents. "
-                       "Re-request the original image through a secure channel.",
-        })
-        return JSONResponse(status_code=400, content={
-            "error": True,
-            "detail": "Decryption failed — possible interception or wrong password.",
-            "alerts": alerts,
-            "metrics": metrics,
-        })
-
-    # Integrity check passed — add success alert
-    alerts.append({
-        "level": "success",
-        "title": "✅ Integrity Verified",
-        "message": "AES-256-GCM authentication tag verified successfully. "
-                   "Data has NOT been tampered with since encoding.",
-    })
+        raise HTTPException(
+            status_code=400,
+            detail="Decryption failed — wrong password, wrong image, or data has been tampered with.",
+        )
 
     # Deserialize
     try:
@@ -265,30 +160,22 @@ async def decode_endpoint(
     except Exception:
         raise HTTPException(status_code=400, detail="Could not parse hidden payload.")
 
-    metrics["decrypted_payload_size_bytes"] = len(data)
-    metrics["total_time_ms"] = round((time.perf_counter() - total_start) * 1000, 2)
-
     if payload_type == PAYLOAD_TEXT:
+        # Return as JSON with the text content
         return JSONResponse(content={
             "type": "text",
             "filename": filename,
             "content": data.decode("utf-8", errors="replace"),
-            "alerts": alerts,
-            "metrics": metrics,
         })
     else:
-        # For file payloads, encode as base64 so we can include metrics in JSON
+        # Return as file download
+        # Guess MIME type from filename
         import mimetypes
         mime, _ = mimetypes.guess_type(filename)
         if not mime:
             mime = "application/octet-stream"
-
-        file_b64 = base64.b64encode(data).decode("ascii")
-        return JSONResponse(content={
-            "type": "file",
-            "filename": filename,
-            "mime_type": mime,
-            "file_base64": file_b64,
-            "alerts": alerts,
-            "metrics": metrics,
-        })
+        return StreamingResponse(
+            BytesIO(data),
+            media_type=mime,
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
