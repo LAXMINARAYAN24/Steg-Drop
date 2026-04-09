@@ -123,22 +123,45 @@ Hide a secret inside a cover image.
 | `secret_text` | string | ⬜ | Text message to hide |
 | `secret_file` | file | ⬜ | File to hide (use *either* `secret_text` or `secret_file`) |
 
-**Response**: PNG image streamed as `stego-drop-output.png`
+**Response**: JSON object containing the stego image as a Base64 string and encoding metrics.
+
+```json
+{
+  "image_base64": "<base64-encoded PNG>",
+  "metrics": {
+    "payload_type": "text",
+    "payload_filename": "message.txt",
+    "original_payload_size_bytes": 42,
+    "key_derivation_time_ms": 312.5,
+    "encryption_time_ms": 0.8,
+    "encrypted_payload_size_bytes": 87,
+    "image_width": 1920,
+    "image_height": 1080,
+    "image_capacity_bytes": 24000,
+    "capacity_used_percent": 0.4,
+    "cover_image_size_bytes": 524288,
+    "steganographic_encoding_time_ms": 95.3,
+    "stego_image_size_bytes": 612345,
+    "total_time_ms": 412.1,
+    "stego_sha256": "a1b2c3d4e5f6a7b8"
+  }
+}
+```
 
 ```bash
-# Embed a text message
+# Embed a text message (save the stego image from the JSON response)
 curl -X POST http://localhost:8000/encode \
   -F "cover_image=@photo.jpg" \
   -F "password=MyStr0ng!Pass" \
   -F "secret_text=Hello, world!" \
-  -o stego.png
+  | python3 -c "import sys,json,base64; d=json.load(sys.stdin); open('stego.png','wb').write(base64.b64decode(d['image_base64']))"
 
 # Embed a file
 curl -X POST http://localhost:8000/encode \
   -F "cover_image=@photo.jpg" \
   -F "password=MyStr0ng!Pass" \
   -F "secret_file=@secret.pdf" \
-  -o stego.png
+  | python3 -c "import sys,json,base64; d=json.load(sys.stdin); open('stego.png','wb').write(base64.b64decode(d['image_base64']))"
 ```
 
 ---
@@ -157,11 +180,40 @@ Extract a secret from a stego image.
 {
   "type": "text",
   "filename": "message.txt",
-  "content": "Hello, world!"
+  "content": "Hello, world!",
+  "alerts": [
+    {
+      "level": "success",
+      "title": "✅ Integrity Verified",
+      "message": "AES-256-GCM authentication tag verified successfully. Data has NOT been tampered with since encoding."
+    }
+  ],
+  "metrics": {
+    "stego_image_size_bytes": 612345,
+    "stego_sha256": "a1b2c3d4e5f6a7b8",
+    "steganographic_decoding_time_ms": 88.2,
+    "extracted_data_size_bytes": 87,
+    "key_derivation_time_ms": 310.1,
+    "decryption_time_ms": 0.5,
+    "decrypted_payload_size_bytes": 42,
+    "total_time_ms": 401.3
+  }
 }
 ```
 
-**Response (file payload)**: Binary stream with the original filename and MIME type.
+**Response (file payload)**:
+```json
+{
+  "type": "file",
+  "filename": "secret.pdf",
+  "mime_type": "application/pdf",
+  "file_base64": "<base64-encoded file content>",
+  "alerts": [...],
+  "metrics": {...}
+}
+```
+
+> **Note:** If decryption fails (wrong password or tampered image), the response has `"error": true` and the `alerts` array will contain a critical interception alert.
 
 ```bash
 curl -X POST http://localhost:8000/decode \
@@ -178,10 +230,8 @@ Steg-Drop/
 ├── app.py               # FastAPI application & API endpoints
 ├── crypto.py            # AES-256-GCM encryption / PBKDF2 key derivation
 ├── stego.py             # Edge-adaptive LSB steganography
-├── make_ppt.py          # Utility: generate a project presentation (PPTX)
 ├── test_roundtrip.py    # Integration test: encode → decode round-trip
 ├── requirements.txt     # Python dependencies
-├── original_image.jpg   # Sample cover image
 └── static/
     ├── index.html       # Single-page application
     ├── script.js        # Frontend logic (tab switching, API calls)
@@ -205,8 +255,12 @@ Steg-Drop/
 ```bash
 # The round-trip test requires the server to be running first
 uvicorn app:app --port 8000 &
+
+# Provide a cover image named test_cover.png
 python test_roundtrip.py
 ```
+
+> **Note:** `test_roundtrip.py` uses the `/encode` and `/decode` JSON API. The encode response returns `image_base64` (Base64-encoded PNG), and the decode response returns the payload as JSON. Make sure `test_cover.png` is present in the project root before running.
 
 ---
 
