@@ -82,7 +82,7 @@ source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
 # 4. Start the server
-uvicorn app:app --host 0.0.0.0 --port 8000
+uvicorn app:app --host localhost --port 8000
 ```
 
 Open your browser and visit **http://localhost:8000**.
